@@ -20,7 +20,7 @@ const App: React.FC = () => {
     month: 1,
     rankTitle: CREATOR_RANKS[0].title,
     money: 0,
-    actionPoints: 100, // Default Action Points increased
+    actionPoints: 100,
     maxActionPoints: 100,
     inspiration: 0,
     skill: 0,
@@ -61,7 +61,6 @@ const App: React.FC = () => {
     }));
   };
 
-  // Check AP availability wrapper
   const checkAp = (cost: number) => {
     if (gameState.actionPoints < cost) {
       alert("行动点不足！请结束本月进入下一回合。");
@@ -90,15 +89,12 @@ const App: React.FC = () => {
     setIsCreating(false);
     const cost = ACTION_COSTS.CREATE;
     
-    // Deduct resources
     setGameState(prev => {
-      // Calculate final stats
       let baseQuality = 40 + (prev.skill * 0.5) + qualityMod;
       baseQuality = Math.min(100, Math.max(10, Math.floor(baseQuality)));
       
       let basePotential = 1.0 + potentialMod;
       
-      // Rank calculation based on final quality
       let rank = WorkRank.B;
       if (baseQuality > 90) rank = WorkRank.SSR;
       else if (baseQuality > 75) rank = WorkRank.S;
@@ -131,7 +127,6 @@ const App: React.FC = () => {
       };
     });
     
-    // 1. Navigation change as requested
     setCurrentView('works');
   };
 
@@ -183,9 +178,7 @@ const App: React.FC = () => {
 
   const handlePromote = (workId: string) => {
     const cost = ACTION_COSTS.PROMOTE;
-    // Check money
     if (gameState.money < cost.money) return alert("资金不足");
-    // Promote doesn't cost AP in this version based on constants, but let's be safe
     if (cost.ap > 0 && !checkAp(cost.ap)) return;
 
     setGameState(prev => ({
@@ -221,8 +214,9 @@ const App: React.FC = () => {
      }));
   };
 
+  // --- 修改重点：全新的回合结束逻辑 ---
   const endMonth = () => {
-    // 6. Check Game Over Condition (AI Suspicion)
+    // 1. 游戏结束检查 (AI 嫌疑值过高)
     if (gameState.aiSuspicion >= 100) {
       setGameState(prev => ({ ...prev, isGameOver: true, gameOverReason: "你的AI创作行为引起了公愤，被全平台封杀，名声扫地！" }));
       return;
@@ -232,14 +226,13 @@ const App: React.FC = () => {
     let monthlyFans = 0;
     let newWorks = [...gameState.works];
 
-    // Calculate passive gains
+    // 2. 计算作品自然流量收益
     newWorks = newWorks.map(work => {
       const age = gameState.month - work.createdAtMonth;
       const decay = Math.max(0.1, 1 - (age * 0.2)); 
       
       let viralBonus = 1;
-      // Increased viral chance slightly for better gameplay loop
-      if (!work.isViral && Math.random() < (work.potential * work.quality / 4000)) {
+      if (!work.isViral && Math.random() < (work.potential * work.quality / 3000)) {
          work.isViral = true;
          addLog(`作品《${work.title}》突然爆火了！全网热议！`, 'viral');
       }
@@ -263,72 +256,79 @@ const App: React.FC = () => {
       };
     });
 
-    const newCommentsCount = Math.max(1, Math.floor(monthlyFans / 40));
+    // 3. 计算作品突发事件 (0-3个)
+    let eventFansChange = 0;
+    let eventFameChange = 0;
+    let eventMoodChange = 0;
+    let eventAiChange = 0;
+
+    // 随机决定本月触发几个作品事件 (0 到 3 个)
+    const numWorkEvents = Math.floor(Math.random() * 4); 
+
+    for (let i = 0; i < numWorkEvents; i++) {
+      if (newWorks.length === 0) break; // 如果没作品就不触发
+      
+      // 随机选一个作品，再随机选一个事件
+      const targetWorkIndex = Math.floor(Math.random() * newWorks.length);
+      const workEvent = WORK_EVENTS_DATA[Math.floor(Math.random() * WORK_EVENTS_DATA.length)];
+      
+      // 执行事件效果
+      const targetWork = newWorks[targetWorkIndex];
+      const result = workEvent.effect(targetWork, gameState);
+      
+      // 更新作品状态
+      newWorks[targetWorkIndex] = { ...targetWork, ...result.workUpdate };
+      
+      // 累加事件带来的主角属性变化
+      if (result.stateUpdate.fans !== undefined) eventFansChange += (result.stateUpdate.fans - gameState.fans);
+      if (result.stateUpdate.fame !== undefined) eventFameChange += (result.stateUpdate.fame - gameState.fame);
+      if (result.stateUpdate.mood !== undefined) eventMoodChange += (result.stateUpdate.mood - gameState.mood);
+      if (result.stateUpdate.aiSuspicion !== undefined) eventAiChange += (result.stateUpdate.aiSuspicion - gameState.aiSuspicion);
+
+      addLog(result.log, 'neutral');
+    }
+
+    // 4. 生成新评论
+    const totalNewFans = monthlyFans + eventFansChange;
+    const newCommentsCount = Math.max(1, Math.floor(totalNewFans / 40));
     const newComments = generateComments(Math.min(6, newCommentsCount)); 
 
-    const newTotalFans = gameState.fans + monthlyFans;
+    // 5. 检查段位升级
+    const newTotalFans = gameState.fans + totalNewFans;
     const newRank = getCurrentRank(newTotalFans);
     let rankUpMsg = "";
     if (newRank.title !== gameState.rankTitle) {
       rankUpMsg = `恭喜！你的创作等级提升为【${newRank.title}】！`;
     }
 
-    // 5. Work Events Logic
-    if (newWorks.length > 0 && Math.random() < 0.3) {
-      const targetWork = newWorks[Math.floor(Math.random() * newWorks.length)];
-      const workEvent = WORK_EVENTS_DATA[Math.floor(Math.random() * WORK_EVENTS_DATA.length)];
-      const result = workEvent.effect(targetWork, gameState);
-      
-      // Apply work updates
-      newWorks = newWorks.map(w => w.id === targetWork.id ? { ...w, ...result.workUpdate } : w);
-      
-      // We will apply state updates in the setGameState below via helper or directly merging
-      // For simplicity, we merge state effects into the general state update logic, 
-      // but to access previous state correctly inside setGameState we need to be careful.
-      // Let's store the event effect to apply it cleanly.
-      addLog(result.log, 'neutral');
-      
-      // Update local variables if they were changed by event so summary is correct-ish (approx)
-      if (result.stateUpdate.fans) monthlyFans += (result.stateUpdate.fans - gameState.fans); // diff
-    }
+    // 6. 必然触发每月大事件
+    const event = EVENTS_DATA[Math.floor(Math.random() * EVENTS_DATA.length)];
+    setActiveEvent(event);
 
-    // 4. Random Event Trigger
-    if (Math.random() < 0.35) {
-      const event = EVENTS_DATA[Math.floor(Math.random() * EVENTS_DATA.length)];
-      setActiveEvent(event);
-    }
-
-    setTempMonthlyData({ income: monthlyIncome, fans: monthlyFans, newComments: newComments.length });
+    // 7. 更新UI显示数据
+    setTempMonthlyData({ income: monthlyIncome, fans: totalNewFans, newComments: newComments.length });
     setShowSummary(true);
 
+    // 8. 统一更新游戏状态
     setGameState(prev => {
-      // Re-run work event logic to get state updates correctly integrated if we want to be 100% pure, 
-      // but simplistic approach:
-      // If a work event happened, we need to apply its state changes (fame, aiSuspicion, fans, mood)
-      let stateUpdatesFromEvent = {};
-      let updatedWorksFromEvent = newWorks; // already updated above
-
-      if (prev.works.length > 0 && Math.random() < 0.3) {
-          const targetWorkIdx = Math.floor(Math.random() * prev.works.length); // Use index to be deterministic with above logic? 
-          // Actually, re-rolling random inside setState is bad practice. 
-          // Let's just assume the updates calculated outside are valid enough for this prototype.
-          // For production code, calculate all deltas before setGameState.
-      }
-
       if (rankUpMsg) addLog(rankUpMsg, 'rankup');
       
       return {
         ...prev,
-        works: updatedWorksFromEvent,
+        works: newWorks,
         money: prev.money + monthlyIncome,
-        fans: prev.fans + monthlyFans,
+        fans: Math.max(0, prev.fans + totalNewFans),
+        fame: prev.fame + eventFameChange,
+        mood: Math.min(100, Math.max(0, prev.mood + eventMoodChange)),
+        aiSuspicion: Math.max(0, prev.aiSuspicion + eventAiChange),
         inbox: [...newComments, ...prev.inbox].slice(0, 50),
         rankTitle: newRank.title,
-        actionPoints: prev.maxActionPoints, // Reset AP
-        monthlyStats: [...prev.monthlyStats, { month: prev.month, income: monthlyIncome, fans: monthlyFans }]
+        actionPoints: prev.maxActionPoints, // 每月回满体力
+        monthlyStats: [...prev.monthlyStats, { month: prev.month, income: monthlyIncome, fans: totalNewFans }]
       };
     });
   };
+  // --- 回合结束逻辑修改完毕 ---
 
   const handleNextMonth = () => {
     setShowSummary(false);
@@ -539,20 +539,3 @@ const App: React.FC = () => {
             </div>
           </div>
         </div>
-      )}
-
-      {/* Month Summary Modal */}
-      {showSummary && (
-        <MonthSummary 
-          gameState={gameState} 
-          onNextMonth={handleNextMonth} 
-          monthlyIncome={tempMonthlyData.income}
-          monthlyFans={tempMonthlyData.fans}
-          newCommentsCount={tempMonthlyData.newComments}
-        />
-      )}
-    </div>
-  );
-};
-
-export default App;
